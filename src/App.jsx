@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Inbox, List, CheckCircle2, Circle, ArrowRight, Clock, Lightbulb, Trash2, BookOpen } from 'lucide-react';
+import { supabase } from './lib/supabase';
+import Auth from './components/Auth';
 
 function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
   const [newItem, setNewItem] = useState('');
   const [view, setView] = useState('inbox');
@@ -28,20 +32,43 @@ function App() {
   const [currentSwipeDirection, setCurrentSwipeDirection] = useState(null);
 
   useEffect(() => {
-    loadData();
-    // eslint-disable-next-line
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) loadData();
+      setLoading(false);
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) loadData();
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
     saveData();
   }, [items]);
 
-  const loadData = () => {
+  const loadData = async () => {
+    if (!session?.user?.id) return;
+    
     try {
-      const data = localStorage.getItem('dumpr-items');
-      if (data) setItems(JSON.parse(data));
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('items')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      setItems(data || []);
     } catch (error) {
-      console.log('No existing data');
+      console.error('Error loading data:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -53,54 +80,90 @@ function App() {
     }
   };
 
-  const addItem = () => {
-    if (!newItem.trim()) return;
-    setItems([
-      ...items,
-      {
-        id: Date.now(),
-        text: newItem.trim(),
-        status: 'inbox',
-        completed: false,
-        created: new Date().toISOString()
-      }
-    ]);
-    setNewItem('');
+  const addItem = async () => {
+    if (!newItem.trim() || !session?.user?.id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('items')
+        .insert([{
+          text: newItem.trim(),
+          status: 'inbox',
+          completed: false,
+          user_id: session.user.id
+        }])
+        .select();
+
+      if (error) throw error;
+      setItems([...items, data[0]]);
+      setNewItem('');
+    } catch (error) {
+      console.error('Error adding item:', error);
+    }
   };
 
   const inboxItems = items.filter(item => item.status === 'inbox' && !item.completed);
   const currentItem = inboxItems[currentIndex];
 
-  const swipeCard = (status) => {
-    if (!currentItem) return;
-    if (status === 'trash') {
-      setItems(items.filter(item => item.id !== currentItem.id));
-      setCurrentIndex(0);
-      setDragOffset({ x: 0, y: 0 });
-    } else {
-      setPendingStatus(status);
-      setDetailsTitle(currentItem.text);
-      setDetailsDescription('');
-      setShowDetailsModal(true);
-      setDragOffset({ x: 0, y: 0 });
+  const swipeCard = async (status) => {
+    if (!currentItem || !session?.user?.id) return;
+    
+    try {
+      if (status === 'trash') {
+        const { error } = await supabase
+          .from('items')
+          .delete()
+          .eq('id', currentItem.id)
+          .eq('user_id', session.user.id);
+
+        if (error) throw error;
+        setItems(items.filter(item => item.id !== currentItem.id));
+        setCurrentIndex(0);
+        setDragOffset({ x: 0, y: 0 });
+      } else {
+        setPendingStatus(status);
+        setDetailsTitle(currentItem.text);
+        setDetailsDescription('');
+        setShowDetailsModal(true);
+        setDragOffset({ x: 0, y: 0 });
+      }
+    } catch (error) {
+      console.error('Error processing item:', error);
     }
   };
 
-  const confirmDetails = () => {
-    if (!currentItem) return;
-    setItems(items.map(item =>
-      item.id === currentItem.id ? {
-        ...item,
-        status: pendingStatus,
-        title: detailsTitle,
-        description: detailsDescription
-      } : item
-    ));
-    setShowDetailsModal(false);
-    setPendingStatus(null);
-    setDetailsTitle('');
-    setDetailsDescription('');
-    setCurrentIndex(0);
+  const confirmDetails = async () => {
+    if (!currentItem || !session?.user?.id) return;
+    
+    try {
+      const { error } = await supabase
+        .from('items')
+        .update({
+          status: pendingStatus,
+          title: detailsTitle,
+          description: detailsDescription
+        })
+        .eq('id', currentItem.id)
+        .eq('user_id', session.user.id);
+
+      if (error) throw error;
+      
+      setItems(items.map(item =>
+        item.id === currentItem.id ? {
+          ...item,
+          status: pendingStatus,
+          title: detailsTitle,
+          description: detailsDescription
+        } : item
+      ));
+      setShowDetailsModal(false);
+      setPendingStatus(null);
+      setDetailsTitle('');
+      setDetailsDescription('');
+      setCurrentIndex(0);
+    } catch (error) {
+      console.error('Error updating item:', error);
+    }
   };
 
   const skipDetails = () => {
@@ -305,8 +368,28 @@ function App() {
   }
 
   // INBOX VIEW
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Auth />;
+  }
+
   return (
     <div className="p-6">
+      {/* Sign out button */}
+      <button
+        onClick={() => supabase.auth.signOut()}
+        className="absolute top-4 right-4 px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
+      >
+        Sign out
+      </button>
+
       {/* Details Modal */}
       {showDetailsModal && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/40">
