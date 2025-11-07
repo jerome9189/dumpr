@@ -34,36 +34,54 @@ function App() {
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
+      console.log('Initial session check:', session);
       setSession(session);
-      if (session) loadData();
       setLoading(false);
     });
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event, session);
       setSession(session);
-      if (session) loadData();
+      if (!session) {
+        setItems([]);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
+  // Separate useEffect for loading data when session changes
+  useEffect(() => {
+    if (session?.user) {
+      console.log('Loading data for user:', session.user.id);
+      loadData(session);
+    }
+  }, [session]);
+
   useEffect(() => {
     saveData();
   }, [items]);
 
-  const loadData = async () => {
-    if (!session?.user?.id) return;
+  const loadData = async (currentSession) => {
+    const sessionToUse = currentSession || session;
+    console.log('LoadData called with session:', sessionToUse);
+    if (!sessionToUse?.user?.id) {
+      console.log('No user ID available, skipping load');
+      return;
+    }
     
     try {
       setLoading(true);
+      console.log('Fetching items for user:', sessionToUse.user.id);
       const { data, error } = await supabase
         .from('items')
         .select('*')
-        .eq('user_id', session.user.id)
+        .eq('user_id', sessionToUse.user.id)
         .order('created_at', { ascending: true });
 
       if (error) throw error;
+      console.log('Loaded items:', data);
       setItems(data || []);
     } catch (error) {
       console.error('Error loading data:', error);
@@ -103,7 +121,9 @@ function App() {
   };
 
   const inboxItems = items.filter(item => item.status === 'inbox' && !item.completed);
+  console.log('Filtered inbox items:', inboxItems);
   const currentItem = inboxItems[currentIndex];
+  console.log('Current item:', currentItem);
 
   const swipeCard = async (status) => {
     if (!currentItem || !session?.user?.id) return;
