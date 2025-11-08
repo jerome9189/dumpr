@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, siteUrl } from '../lib/supabase'
 
 export default function Auth() {
   const [loading, setLoading] = useState(false)
@@ -10,11 +10,15 @@ export default function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin
+          redirectTo: siteUrl,
+          queryParams: {
+            prompt: 'select_account'
+          }
         }
       })
       if (error) throw error
     } catch (error) {
+      console.error('Auth error:', error);
       alert(error.error_description || error.message)
     } finally {
       setLoading(false)

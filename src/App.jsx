@@ -98,6 +98,26 @@ function App() {
     }
   };
 
+  const completeItem = async (itemId) => {
+    if (!session?.user?.id) return;
+    
+    try {
+      const { error } = await supabase
+        .from('items')
+        .update({ completed: true })
+        .eq('id', itemId)
+        .eq('user_id', session.user.id);
+
+      if (error) throw error;
+      
+      setItems(items.map(item =>
+        item.id === itemId ? { ...item, completed: true } : item
+      ));
+    } catch (error) {
+      console.error('Error completing item:', error);
+    }
+  };
+
   const addItem = async () => {
     if (!newItem.trim() || !session?.user?.id) return;
     
@@ -369,7 +389,7 @@ function App() {
                             {item.description && <div className="text-sm text-slate-500">{item.description}</div>}
                           </div>
                           <button
-                            onClick={() => setItems(items.map(i => i.id === item.id ? { ...i, completed: true } : i))}
+                            onClick={() => completeItem(item.id)}
                             className="ml-4 text-slate-400 hover:text-green-600 transition-colors"
                           >
                             <CheckCircle2 size={18} />
