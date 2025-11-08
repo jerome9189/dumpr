@@ -9,6 +9,14 @@ function App() {
   const [items, setItems] = useState([]);
   const [newItem, setNewItem] = useState('');
   const [view, setView] = useState('inbox');
+  
+  // Reload data when switching views to ensure we have fresh data
+  const switchView = (newView) => {
+    setView(newView);
+    if (session?.user) {
+      loadData(session);
+    }
+  };
   const [currentIndex, setCurrentIndex] = useState(0);
   const [dragStart, setDragStart] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -78,6 +86,7 @@ function App() {
         .from('items')
         .select('*')
         .eq('user_id', sessionToUse.user.id)
+        .eq('completed', false)  // Only load incomplete items
         .order('created_at', { ascending: true });
 
       if (error) throw error;
@@ -102,17 +111,22 @@ function App() {
     if (!session?.user?.id) return;
     
     try {
+      console.log('Completing item:', itemId);
       const { error } = await supabase
         .from('items')
         .update({ completed: true })
         .eq('id', itemId)
-        .eq('user_id', session.user.id);
+        .eq('user_id', session.user.id)
+        .select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Database error:', error);
+        throw error;
+      }
       
-      setItems(items.map(item =>
-        item.id === itemId ? { ...item, completed: true } : item
-      ));
+      // Remove the completed item from the list immediately
+      setItems(prevItems => prevItems.filter(item => item.id !== itemId));
+      console.log('Item completed successfully');
     } catch (error) {
       console.error('Error completing item:', error);
     }
@@ -176,7 +190,24 @@ function App() {
     if (!currentItem || !session?.user?.id) return;
     
     try {
-      const { error } = await supabase
+      // Reload the item first to ensure we have the latest state
+      const { data: currentData, error: fetchError } = await supabase
+        .from('items')
+        .select()
+        .eq('id', currentItem.id)
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (fetchError) throw fetchError;
+      
+      // If the item is already completed, don't update it
+      if (currentData.completed) {
+        setItems(prevItems => prevItems.filter(item => item.id !== currentItem.id));
+        console.log('Item was already completed, removing from UI');
+        return;
+      }
+
+      const { data, error } = await supabase
         .from('items')
         .update({
           status: pendingStatus,
@@ -184,42 +215,82 @@ function App() {
           description: detailsDescription
         })
         .eq('id', currentItem.id)
-        .eq('user_id', session.user.id);
+        .eq('user_id', session.user.id)
+        .select();
 
       if (error) throw error;
       
-      setItems(items.map(item =>
-        item.id === currentItem.id ? {
-          ...item,
-          status: pendingStatus,
-          title: detailsTitle,
-          description: detailsDescription
-        } : item
-      ));
+      // Update local state with the returned data to ensure consistency
+      if (data?.[0]) {
+        setItems(prevItems => prevItems.map(item =>
+          item.id === currentItem.id ? data[0] : item
+        ));
+      }
+      
+      console.log('Item updated successfully:', data?.[0]);
+    } catch (error) {
+      console.error('Error updating item:', error);
+    } finally {
       setShowDetailsModal(false);
       setPendingStatus(null);
       setDetailsTitle('');
       setDetailsDescription('');
       setCurrentIndex(0);
-    } catch (error) {
-      console.error('Error updating item:', error);
     }
   };
 
-  const skipDetails = () => {
-    if (!currentItem) return;
-    setItems(items.map(item =>
-      item.id === currentItem.id ? {
-        ...item,
-        status: pendingStatus,
-        title: currentItem.text
-      } : item
-    ));
-    setShowDetailsModal(false);
-    setPendingStatus(null);
-    setDetailsTitle('');
-    setDetailsDescription('');
-    setCurrentIndex(0);
+  const skipDetails = async () => {
+    if (!currentItem || !session?.user?.id) return;
+    
+    try {
+      // Reload the item first to ensure we have the latest state
+      const { data: currentData, error: fetchError } = await supabase
+        .from('items')
+        .select()
+        .eq('id', currentItem.id)
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (fetchError) throw fetchError;
+      
+      // If the item is already completed, don't update it
+      if (currentData.completed) {
+        setItems(prevItems => prevItems.filter(item => item.id !== currentItem.id));
+        console.log('Item was already completed, removing from UI');
+        return;
+      }
+
+      const { error } = await supabase
+        .from('items')
+        .update({
+          status: pendingStatus,
+          title: currentItem.text
+        })
+        .eq('id', currentItem.id)
+        .eq('user_id', session.user.id)
+        .select();
+
+      if (error) throw error;
+      
+      // Update local state
+      setItems(prevItems => prevItems.map(item =>
+        item.id === currentItem.id ? {
+          ...item,
+          status: pendingStatus,
+          title: currentItem.text
+        } : item
+      ));
+      
+      console.log('Item updated successfully:', pendingStatus);
+    } catch (error) {
+      console.error('Error updating item:', error);
+    } finally {
+      setShowDetailsModal(false);
+      setPendingStatus(null);
+      setDetailsTitle('');
+      setDetailsDescription('');
+      setCurrentIndex(0);
+    }
   };
 
   const handleMouseDown = (e) => {
@@ -340,12 +411,12 @@ function App() {
     return labels[status] || status;
   };
 
-  const allItems = items.filter(item => !item.completed);
+  // Ensure we only show incomplete items in each list
   const byStatus = {
-    next: allItems.filter(i => i.status === 'next'),
-    waiting: allItems.filter(i => i.status === 'waiting'),
-    someday: allItems.filter(i => i.status === 'someday'),
-    reference: allItems.filter(i => i.status === 'reference')
+    next: items.filter(i => i.status === 'next' && !i.completed),
+    waiting: items.filter(i => i.status === 'waiting' && !i.completed),
+    someday: items.filter(i => i.status === 'someday' && !i.completed),
+    reference: items.filter(i => i.status === 'reference' && !i.completed)
   };
 
   // LISTS VIEW
@@ -361,7 +432,7 @@ function App() {
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">All Lists</h1>
-          <button onClick={() => setView('inbox')} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
+          <button onClick={() => switchView('inbox')} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
             <Inbox size={16} /> Back to Inbox
           </button>
         </div>
@@ -464,7 +535,7 @@ function App() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Inbox</h1>
         <div className="flex items-center gap-3">
-          <button onClick={() => setView('lists')} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-colors inline-flex items-center gap-2">
+          <button onClick={() => switchView('lists')} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-colors inline-flex items-center gap-2">
             <List size={16} /> View All Lists
           </button>
         </div>
@@ -489,7 +560,7 @@ function App() {
       {inboxItems.length === 0 ? (
         <div className="text-center py-12">
           <div className="text-xl font-semibold">Inbox Zero! 🎉</div>
-          <button onClick={() => setView('lists')} className="mt-4 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-colors">
+          <button onClick={() => switchView('lists')} className="mt-4 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-colors">
             View All Lists
           </button>
         </div>
