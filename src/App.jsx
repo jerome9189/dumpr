@@ -493,14 +493,6 @@ function App() {
 
   return (
     <div className="p-6">
-      {/* Sign out button */}
-      <button
-        onClick={() => supabase.auth.signOut()}
-        className="absolute top-4 right-4 px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
-      >
-        Sign out
-      </button>
-
       {/* Details Modal */}
       {showDetailsModal && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/40">
@@ -537,6 +529,12 @@ function App() {
         <div className="flex items-center gap-3">
           <button onClick={() => switchView('lists')} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-colors inline-flex items-center gap-2">
             <List size={16} /> View All Lists
+          </button>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
+          >
+            Sign out
           </button>
         </div>
       </div>
